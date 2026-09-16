@@ -93,7 +93,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'products' },
-        (payload) => {
+        (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
           if (payload.eventType === 'INSERT') {
             const newProduct = mapRowToProduct(payload.new as Record<string, unknown>);
             setProducts((prev) =>
