@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { Category, Product } from '../../types';
 import { CATEGORIES } from '../../types';
@@ -6,7 +7,7 @@ import Modal from '../ui/Modal';
 interface ProductFormModalProps {
   open: boolean;
   onClose: () => void;
-  onSave: (product: Omit<Product, 'id'> | Product) => void;
+  onSave: (product: Omit<Product, 'id'> | Product) => Promise<void>;
   editingProduct: Product | null;
 }
 
@@ -28,6 +29,7 @@ export default function ProductFormModal({
   editingProduct,
 }: ProductFormModalProps) {
   const [form, setForm] = useState<Omit<Product, 'id'>>(emptyForm);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (editingProduct) {
@@ -39,16 +41,22 @@ export default function ProductFormModal({
     }
   }, [editingProduct, open]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaving(true);
     const cleaned: Omit<Product, 'id'> = {
       ...form,
       price: Number(form.price) || 0,
       stock: Number(form.stock) || 0,
       image: form.image.trim() || DEFAULT_IMAGE,
     };
-    onSave(editingProduct ? { ...cleaned, id: editingProduct.id } : cleaned);
-    onClose();
+    try {
+      await onSave(editingProduct ? { ...cleaned, id: editingProduct.id } : cleaned);
+      onClose();
+    } catch {
+      // error handled by parent
+    }
+    setSaving(false);
   };
 
   return (
@@ -165,8 +173,10 @@ export default function ProductFormModal({
           <button type="button" onClick={onClose} className="btn-secondary flex-1">
             Cancelar
           </button>
-          <button type="submit" className="btn-primary flex-1">
-            {editingProduct ? 'Guardar cambios' : 'Agregar producto'}
+          <button type="submit" disabled={saving} className="btn-primary flex-1 disabled:opacity-60">
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : editingProduct ? 'Guardar cambios' : 'Agregar producto'}
           </button>
         </div>
       </form>

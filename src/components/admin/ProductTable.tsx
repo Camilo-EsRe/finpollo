@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pencil, Trash2, Plus, Search, AlertTriangle } from 'lucide-react';
+import { Pencil, Trash2, Plus, Search, AlertTriangle, Loader2 } from 'lucide-react';
 import type { Product } from '../../types';
 import { useStore } from '../../context/StoreContext';
 import { categoryColors, formatPrice } from '../../lib/utils';
@@ -7,11 +7,14 @@ import Modal from '../ui/Modal';
 import ProductFormModal from './ProductFormModal';
 
 export default function ProductTable() {
-  const { products, addProduct, updateProduct, deleteProduct } = useStore();
+  const { products, productsLoading, addProduct, updateProduct, deleteProduct } = useStore();
   const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   const filtered = products.filter(
     (p) =>
@@ -19,23 +22,41 @@ export default function ProductTable() {
       p.category.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleSave = (data: Omit<Product, 'id'> | Product) => {
-    if ('id' in data) {
-      updateProduct(data);
-    } else {
-      addProduct(data);
+  const handleSave = async (data: Omit<Product, 'id'> | Product) => {
+    setSaving(true);
+    setActionError('');
+    try {
+      if ('id' in data) {
+        await updateProduct(data);
+      } else {
+        await addProduct(data);
+      }
+    } catch {
+      setActionError('No se pudo guardar el producto. Intenta de nuevo.');
     }
+    setSaving(false);
   };
 
-  const confirmDelete = () => {
-    if (deleteTarget) {
-      deleteProduct(deleteTarget.id);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setActionError('');
+    try {
+      await deleteProduct(deleteTarget.id);
       setDeleteTarget(null);
+    } catch {
+      setActionError('No se pudo eliminar el producto. Intenta de nuevo.');
     }
+    setDeleting(false);
   };
 
   return (
     <div className="card overflow-hidden">
+      {actionError && (
+        <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2.5 text-sm text-red-400">
+          {actionError}
+        </div>
+      )}
       {/* Toolbar */}
       <div className="flex flex-col gap-3 border-b border-neutral-800 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative flex-1 sm:max-w-xs">
@@ -134,7 +155,13 @@ export default function ProductTable() {
             ))}
           </tbody>
         </table>
-        {filtered.length === 0 && <EmptyState />}
+        {productsLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-stone-500" />
+          </div>
+        ) : (
+          filtered.length === 0 && <EmptyState />
+        )}
       </div>
 
       {/* Cards — mobile */}
@@ -183,7 +210,13 @@ export default function ProductTable() {
             </div>
           </div>
         ))}
-        {filtered.length === 0 && <EmptyState />}
+        {productsLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-stone-500" />
+          </div>
+        ) : (
+          filtered.length === 0 && <EmptyState />
+        )}
       </div>
 
       {/* Form modal */}
@@ -217,9 +250,14 @@ export default function ProductTable() {
           </button>
           <button
             onClick={confirmDelete}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-red-500 active:scale-[0.98]"
+            disabled={deleting}
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-red-500 active:scale-[0.98] disabled:opacity-60"
           >
-            <Trash2 className="h-4 w-4" />
+            {deleting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
             Eliminar
           </button>
         </div>

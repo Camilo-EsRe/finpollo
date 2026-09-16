@@ -1,13 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { CartItem, Product } from '../types';
 import { SEED_PRODUCTS } from '../data/seedProducts';
+import { supabase } from '../lib/supabase';
 import type { ToastData } from '../components/ui/Toast';
 
-const PRODUCTS_KEY = 'fimpollo_products';
 const CART_KEY = 'fimpollo_cart';
 
 interface StoreContextValue {
   products: Product[];
+  productsLoading: boolean;
   cart: CartItem[];
   cartCount: number;
   cartTotal: number;
@@ -15,29 +16,15 @@ interface StoreContextValue {
   removeFromCart: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   clearCart: () => void;
-  addProduct: (product: Omit<Product, 'id'>) => void;
-  updateProduct: (product: Product) => void;
-  deleteProduct: (productId: string) => void;
+  addProduct: (product: Omit<Product, 'id'>) => Promise<void>;
+  updateProduct: (product: Product) => Promise<void>;
+  deleteProduct: (productId: string) => Promise<void>;
   toasts: ToastData[];
   showToast: (message: string, actionLabel?: string, onAction?: () => void) => void;
   dismissToast: (id: number) => void;
 }
 
 const StoreContext = createContext<StoreContextValue | null>(null);
-
-function loadProducts(): Product[] {
-  try {
-    const raw = localStorage.getItem(PRODUCTS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Product[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // fall through to seed
-  }
-  localStorage.setItem(PRODUCTS_KEY, JSON.stringify(SEED_PRODUCTS));
-  return SEED_PRODUCTS;
-}
 
 function loadCart(): CartItem[] {
   try {
@@ -49,12 +36,25 @@ function loadCart(): CartItem[] {
   return [];
 }
 
+function mapRowToProduct(row: Record<string, unknown>): Product {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    price: Number(row.price),
+    category: String(row.category) as Product['category'],
+    image: String(row.image),
+    description: row.description ? String(row.description) : undefined,
+    stock: Number(row.stock),
+  };
+}
+
 function generateId(): string {
   return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [products, setProducts] = useState<Product[]>(loadProducts);
+  const [products, setProducts] = useState<Product[]>(SEED_PRODUCTS);
+  const [productsLoading, setProductsLoading] = useState(true);
   const [cart, setCart] = useState<CartItem[]>(loadCart);
   const [toasts, setToasts] = useState<ToastData[]>([]);
 
@@ -70,9 +70,51 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // Load products from Supabase and subscribe to real-time changes
   useEffect(() => {
-    localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
-  }, [products]);
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (cancelled) return;
+
+      if (!error && data && data.length > 0) {
+        setProducts(data.map(mapRowToProduct));
+      }
+      setProductsLoading(false);
+    })();
+
+    const channel = supabase
+      .channel('products-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newProduct = mapRowToProduct(payload.new as Record<string, unknown>);
+            setProducts((prev) =>
+              prev.some((p) => p.id === newProduct.id) ? prev : [...prev, newProduct]
+            );
+          } else if (payload.eventType === 'UPDATE') {
+            const updated = mapRowToProduct(payload.new as Record<string, unknown>);
+            setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = String((payload.old as Record<string, unknown>).id);
+            setProducts((prev) => prev.filter((p) => p.id !== oldId));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(CART_KEY, JSON.stringify(cart));
@@ -110,18 +152,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const clearCart = useCallback(() => setCart([]), []);
 
-  const addProduct = useCallback((product: Omit<Product, 'id'>) => {
-    setProducts((prev) => [{ ...product, id: generateId() }, ...prev]);
+  const addProduct = useCallback(async (product: Omit<Product, 'id'>) => {
+    const id = generateId();
+    const { error } = await supabase.from('products').insert({
+      id,
+      name: product.name,
+      price: product.price,
+      category: product.category,
+      image: product.image,
+      description: product.description ?? null,
+      stock: product.stock,
+    });
+    if (error) throw error;
   }, []);
 
-  const updateProduct = useCallback((product: Product) => {
-    setProducts((prev) =>
-      prev.map((p) => (p.id === product.id ? product : p))
-    );
+  const updateProduct = useCallback(async (product: Product) => {
+    const { error } = await supabase
+      .from('products')
+      .update({
+        name: product.name,
+        price: product.price,
+        category: product.category,
+        image: product.image,
+        description: product.description ?? null,
+        stock: product.stock,
+      })
+      .eq('id', product.id);
+    if (error) throw error;
   }, []);
 
-  const deleteProduct = useCallback((productId: string) => {
-    setProducts((prev) => prev.filter((p) => p.id !== productId));
+  const deleteProduct = useCallback(async (productId: string) => {
+    const { error } = await supabase.from('products').delete().eq('id', productId);
+    if (error) throw error;
   }, []);
 
   const cartCount = useMemo(
@@ -136,6 +198,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const value: StoreContextValue = {
     products,
+    productsLoading,
     cart,
     cartCount,
     cartTotal,
